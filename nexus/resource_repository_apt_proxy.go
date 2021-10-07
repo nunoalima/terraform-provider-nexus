@@ -85,22 +85,6 @@ func resourceRepositoryAptProxy() *schema.Resource {
 		},
 
 		Schema: map[string]*schema.Schema{
-			"format": {
-				Description:  "Repository format",
-				ForceNew:     true,
-				Optional:     true,
-				Default:      "apt",
-				Type:         schema.TypeString,
-				ValidateFunc: validation.StringInSlice(nexus.RepositoryFormats, false),
-			},
-			"type": {
-				Description:  "Repository type",
-				ForceNew:     true,
-				Type:         schema.TypeString,
-				Optional:     true,
-				Default:      "proxy",
-				ValidateFunc: validation.StringInSlice(nexus.RepositoryTypes, false),
-			},
 			"name": {
 				Description: "A unique identifier for this repository",
 				Required:    true,
@@ -116,14 +100,13 @@ func resourceRepositoryAptProxy() *schema.Resource {
 				Description: "The storage configuration of the repository",
 				DefaultFunc: repositoryStorageDefault,
 				Type:        schema.TypeList,
-				Optional:    true,
+				Required:    true,
 				MaxItems:    1,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
 						"blob_store_name": {
-							Default:     "default",
 							Description: "Blob store used to store repository contents",
-							Optional:    true,
+							Required:    true,
 							Type:        schema.TypeString,
 						},
 						"strict_content_type_validation": {
@@ -160,15 +143,13 @@ func resourceRepositoryAptProxy() *schema.Resource {
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
 						"blocked": {
-							Default:     false,
 							Description: "Whether to block outbound connections on the repository",
-							Optional:    true,
+							Required:    true,
 							Type:        schema.TypeBool,
 						},
 						"auto_block": {
-							Default:     true,
 							Description: "Whether to auto-block outbound connections if remote peer is detected as unreachable/unresponsive",
-							Optional:    true,
+							Required:    true,
 							Type:        schema.TypeBool,
 						},
 						"connection": {
@@ -261,14 +242,13 @@ func resourceRepositoryAptProxy() *schema.Resource {
 			"negative_cache": {
 				Description: "Configuration of the negative cache handling",
 				Type:        schema.TypeList,
-				Optional:    true,
+				Required:    true,
 				MaxItems:    1,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
 						"enabled": {
-							Default:     false,
 							Description: "Whether to cache responses for content not present in the proxied repository",
-							Optional:    true,
+							Required:    true,
 							Type:        schema.TypeBool,
 						},
 						"ttl": {
@@ -283,7 +263,7 @@ func resourceRepositoryAptProxy() *schema.Resource {
 			"proxy": {
 				Description: "Configuration for the proxy repository",
 				Type:        schema.TypeList,
-				Optional:    true,
+				Required:    true,
 				MaxItems:    1,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
@@ -302,7 +282,7 @@ func resourceRepositoryAptProxy() *schema.Resource {
 						"remote_url": {
 							Description: "Location of the remote repository being proxied",
 							Type:        schema.TypeString,
-							Optional:    true,
+							Required:    true,
 						},
 					},
 				},
@@ -338,7 +318,7 @@ func resourceRepositoryAptProxy() *schema.Resource {
 func resourceRepositoryAptProxyCreate(d *schema.ResourceData, m interface{}) error {
 	client := m.(nexus.Client)
 
-	repo := getRepositoryFromResourceData(d)
+	repo := getRepositoryAptProxyFromResourceData(d)
 
 	if err := client.RepositoryCreate(repo); err != nil {
 		return err
@@ -371,7 +351,7 @@ func resourceRepositoryAptProxyUpdate(d *schema.ResourceData, m interface{}) err
 	client := m.(nexus.Client)
 
 	repoName := d.Id()
-	repo := getRepositoryFromResourceData(d)
+	repo := getRepositoryAptProxyFromResourceData(d)
 
 	if err := client.RepositoryUpdate(repoName, repo); err != nil {
 		return err
@@ -395,4 +375,124 @@ func resourceRepositoryAptProxyExists(d *schema.ResourceData, m interface{}) (bo
 
 	repo, err := nexusClient.RepositoryRead(d.Id())
 	return repo != nil, err
+}
+
+func getRepositoryAptProxyFromResourceData(d *schema.ResourceData) nexus.Repository {
+	repo := nexus.Repository{
+		Format: "apt",
+		Name:   d.Get("name").(string),
+		Online: d.Get("online").(bool),
+		Type:   "proxy",
+	}
+
+	if _, ok := d.GetOk("apt"); ok {
+		aptList := d.Get("apt").([]interface{})
+		aptConfig := aptList[0].(map[string]interface{})
+
+		repo.RepositoryApt = &nexus.RepositoryApt{
+			Distribution: aptConfig["distribution"].(string),
+			Flat:         aptConfig["flat"].(bool),
+		}
+	}
+
+	if _, ok := d.GetOk("cleanup"); ok {
+		cleanupList := d.Get("cleanup").([]interface{})
+		cleanupConfig := cleanupList[0].(map[string]interface{})
+		repo.RepositoryCleanup = &nexus.RepositoryCleanup{
+			PolicyNames: interfaceSliceToStringSlice(cleanupConfig["policy_names"].(*schema.Set).List()),
+		}
+	}
+
+	if _, ok := d.GetOk("group"); ok {
+		groupList := d.Get("group").([]interface{})
+		groupMemberNames := make([]string, 0)
+
+		if len(groupList) == 1 && groupList[0] != nil {
+			groupConfig := groupList[0].(map[string]interface{})
+			groupConfigMemberNames := groupConfig["member_names"].(*schema.Set)
+
+			for _, v := range groupConfigMemberNames.List() {
+				groupMemberNames = append(groupMemberNames, v.(string))
+			}
+		}
+		repo.RepositoryGroup = &nexus.RepositoryGroup{
+			MemberNames: groupMemberNames,
+		}
+	}
+
+	if _, ok := d.GetOk("http_client"); ok {
+		httpClientList := d.Get("http_client").([]interface{})
+		httpClientConfig := httpClientList[0].(map[string]interface{})
+
+		repo.RepositoryHTTPClient = &nexus.RepositoryHTTPClient{
+			AutoBlock: httpClientConfig["auto_block"].(bool),
+			Blocked:   httpClientConfig["blocked"].(bool),
+		}
+
+		if v, ok := httpClientConfig["authentication"]; ok {
+			authList := v.([]interface{})
+			if len(authList) == 1 && authList[0] != nil {
+				authConfig := authList[0].(map[string]interface{})
+
+				repo.RepositoryHTTPClient.Authentication = &nexus.RepositoryHTTPClientAuthentication{
+					NTLMDomain: authConfig["ntlm_domain"].(string),
+					NTLMHost:   authConfig["ntlm_host"].(string),
+					Type:       authConfig["type"].(string),
+					Username:   authConfig["username"].(string),
+					Password:   authConfig["password"].(string),
+				}
+			}
+		}
+
+		if v, ok := httpClientConfig["connection"]; ok {
+			connList := v.([]interface{})
+			if len(connList) == 1 && connList[0] != nil {
+				connConfig := connList[0].(map[string]interface{})
+
+				repo.RepositoryHTTPClient.Connection = &nexus.RepositoryHTTPClientConnection{
+					//EnableCookies:   connConfig["enable_cookis"].(bool),
+					Retries: connConfig["retries"].(*int),
+					Timeout: connConfig["timeout"].(*int),
+					//UserAgentSuffix: connConfig["user_agent_suffix"].(*string),
+				}
+			}
+		}
+	}
+
+	if _, ok := d.GetOk("negative_cache"); ok {
+		negativeCacheList := d.Get("negative_cache").([]interface{})
+		negativeCacheConfig := negativeCacheList[0].(map[string]interface{})
+
+		repo.RepositoryNegativeCache = &nexus.RepositoryNegativeCache{
+			Enabled: negativeCacheConfig["enabled"].(bool),
+			TTL:     negativeCacheConfig["ttl"].(int),
+		}
+	}
+
+	if _, ok := d.GetOk("proxy"); ok {
+		proxyList := d.Get("proxy").([]interface{})
+		proxyConfig := proxyList[0].(map[string]interface{})
+		repo.RepositoryProxy = &nexus.RepositoryProxy{
+			ContentMaxAge:  proxyConfig["content_max_age"].(int),
+			MetadataMaxAge: proxyConfig["metadata_max_age"].(int),
+			RemoteURL:      proxyConfig["remote_url"].(string),
+		}
+	}
+
+	if _, ok := d.GetOk("storage"); ok {
+		storageList := d.Get("storage").([]interface{})
+		storageConfig := storageList[0].(map[string]interface{})
+
+		repo.RepositoryStorage = &nexus.RepositoryStorage{
+			BlobStoreName:               storageConfig["blob_store_name"].(string),
+			StrictContentTypeValidation: storageConfig["strict_content_type_validation"].(bool),
+		}
+		// Only hosted repository has attribute WritePolicy
+		if repo.Type == nexus.RepositoryTypeHosted {
+			writePolicy := storageConfig["write_policy"].(string)
+			repo.RepositoryStorage.WritePolicy = &writePolicy
+		}
+	}
+
+	return repo
 }
