@@ -14,6 +14,9 @@ resource "nexus_role" "nx-admin" {
   roles       = []
 }
 ```
+The argument roles expects list of roleid !
+Further Read: [issue 68 comment|https://github.com/datadrivers/terraform-provider-nexus/issues/68#issuecomment-654957014]
+
 
 Example Usage - Create a group with privileges
 
